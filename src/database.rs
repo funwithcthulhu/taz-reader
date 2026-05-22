@@ -1288,6 +1288,65 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_save_preserves_upload_status_and_filter_counts() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let article = make_article("https://taz.de/Duplicate-Test/!4242/", "Duplicate Test");
+        let first_id = db.save_article(&article).unwrap();
+        db.mark_uploaded(first_id, 4242, "https://lingq.com/lesson/4242/")
+            .unwrap();
+
+        let mut duplicate = article.clone();
+        duplicate.title = "Duplicate Test Refreshed".to_owned();
+        duplicate.body_text = "Refreshed body.".to_owned();
+        duplicate.clean_text = "Refreshed clean text.".to_owned();
+        duplicate.word_count = 3;
+
+        let second_id = db.save_article(&duplicate).unwrap();
+        assert_eq!(first_id, second_id);
+
+        let stored = db.get_article(first_id).unwrap().unwrap();
+        assert_eq!(stored.title, "Duplicate Test Refreshed");
+        assert!(stored.uploaded_to_lingq);
+        assert_eq!(stored.lingq_lesson_id, Some(4242));
+        assert_eq!(stored.lingq_lesson_url, "https://lingq.com/lesson/4242/");
+
+        let mut same_text_different_url = duplicate.clone();
+        same_text_different_url.article_key =
+            article_key_from_url("https://taz.de/Other-Duplicate-Test/!4243/");
+        same_text_different_url.url = "https://taz.de/Other-Duplicate-Test/!4243/".to_owned();
+        let distinct_id = db.save_article(&same_text_different_url).unwrap();
+        assert_ne!(first_id, distinct_id);
+
+        let all_articles = db
+            .list_articles(&ArticleQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(all_articles.len(), 2);
+        assert!(
+            all_articles
+                .iter()
+                .any(|article| article.id == first_id && article.uploaded_to_lingq)
+        );
+        assert!(
+            all_articles
+                .iter()
+                .any(|article| article.id == distinct_id && !article.uploaded_to_lingq)
+        );
+
+        let not_uploaded = db
+            .list_articles(&ArticleQuery {
+                only_not_uploaded: true,
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(not_uploaded.len(), 1);
+        assert_eq!(not_uploaded[0].id, distinct_id);
+    }
+
+    #[test]
     fn mark_uploaded_and_query() {
         let db = Database::open(Path::new(":memory:")).unwrap();
         let article = Article {
