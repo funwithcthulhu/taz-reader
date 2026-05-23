@@ -210,46 +210,7 @@ impl TazClient {
     pub async fn fetch_article(&self, url: &str) -> Result<Article> {
         info!("Fetching article: {url}");
         let html = self.fetch_html(url).await?;
-        let document = Html::parse_document(&html);
-
-        let title = normalized_title(
-            first_text(&document, title_selectors()).unwrap_or_else(|| "Untitled".to_owned()),
-        );
-        let subtitle = first_attr(&document, subtitle_selectors(), "content").unwrap_or_default();
-        let author = first_attr(&document, author_selectors(), "content")
-            .or_else(|| first_text(&document, author_fallback_selectors()))
-            .unwrap_or_default();
-        let date = extract_date(&document, &html, url)
-            .map(|d| normalize_date(&d))
-            .unwrap_or_default();
-        let section = first_attr(&document, section_selectors(), "content")
-            .or_else(|| extract_section_from_html(&html))
-            .unwrap_or_else(|| infer_section_from_url(url));
-        let paywalled = detect_paywall(&document, &html);
-        let body_text = extract_body(&document)?;
-        let word_count = body_text.split_whitespace().count();
-        if word_count < 80 {
-            bail!("article extraction produced too little text for {url}");
-        }
-
-        let clean_text = build_clean_text(&title, &subtitle, &author, &date, &body_text);
-        let difficulty = estimate_difficulty(&body_text);
-
-        Ok(Article {
-            article_key: article_key_from_url(url),
-            url: url.to_owned(),
-            title,
-            subtitle,
-            author,
-            date,
-            section,
-            body_text,
-            clean_text,
-            word_count,
-            difficulty,
-            paywalled,
-            fetched_at: iso_timestamp_now(),
-        })
+        parse_article_from_html(url, &html)
     }
 
     pub async fn fetch_article_metadata(&self, url: &str) -> Result<ArticleMetadata> {
@@ -398,6 +359,49 @@ impl TazClient {
     }
 }
 
+fn parse_article_from_html(url: &str, html: &str) -> Result<Article> {
+    let document = Html::parse_document(html);
+
+    let title = normalized_title(
+        first_text(&document, title_selectors()).unwrap_or_else(|| "Untitled".to_owned()),
+    );
+    let subtitle = first_attr(&document, subtitle_selectors(), "content").unwrap_or_default();
+    let author = first_attr(&document, author_selectors(), "content")
+        .or_else(|| first_text(&document, author_fallback_selectors()))
+        .unwrap_or_default();
+    let date = extract_date(&document, html, url)
+        .map(|d| normalize_date(&d))
+        .unwrap_or_default();
+    let section = first_attr(&document, section_selectors(), "content")
+        .or_else(|| extract_section_from_html(html))
+        .unwrap_or_else(|| infer_section_from_url(url));
+    let paywalled = detect_paywall(&document, html);
+    let body_text = extract_body(&document)?;
+    let word_count = body_text.split_whitespace().count();
+    if word_count < 80 {
+        bail!("article extraction produced too little text for {url}");
+    }
+
+    let clean_text = build_clean_text(&title, &subtitle, &author, &date, &body_text);
+    let difficulty = estimate_difficulty(&body_text);
+
+    Ok(Article {
+        article_key: article_key_from_url(url),
+        url: url.to_owned(),
+        title,
+        subtitle,
+        author,
+        date,
+        section,
+        body_text,
+        clean_text,
+        word_count,
+        difficulty,
+        paywalled,
+        fetched_at: iso_timestamp_now(),
+    })
+}
+
 fn empty_report() -> DiscoveryReport {
     DiscoveryReport {
         source_pages_visited: 0,
@@ -425,4 +429,157 @@ fn is_retryable_status(status: StatusCode) -> bool {
             status,
             StatusCode::TOO_MANY_REQUESTS | StatusCode::REQUEST_TIMEOUT
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_article_with_boilerplate() -> &'static str {
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Streit um Stadtverkehr | taz.de</title>
+    <meta property="og:title" content="Streit um Stadtverkehr">
+    <meta name="description" content="Die Stadt will Busspuren, Fahrradwege und breitere Gehwege schneller bauen, doch Händlerinnen und Anwohner streiten über Tempo und Kosten.">
+    <meta property="article:author" content="Test Autorin">
+    <meta property="article:section" content="Verkehr">
+    <meta property="article:published_time" content="2025-04-02T08:15:00+02:00">
+</head>
+<body>
+<nav>
+    <p>Politik Kultur Meinung Suche Newsletter</p>
+</nav>
+<article>
+    <header>
+        <h1>Streit um Stadtverkehr</h1>
+    </header>
+    <p>Die Stadt will Busspuren, Fahrradwege und breitere Gehwege schneller bauen, doch Händlerinnen und Anwohner streiten über Tempo und Kosten.</p>
+    <p>Im Verkehrsausschuss sagten Vertreterinnen der Initiative, dass viele Kreuzungen schon heute gefährlich seien und dass Kinder, ältere Menschen sowie <a href="/tag/fahrgaeste/">Fahrgäste</a> an Haltestellen zu wenig Platz hätten.</p>
+    <aside class="related">
+        <p>Mehr zum Thema Verkehrspolitik lesen Sie in unserem Dossier mit verwandten Artikeln und Kommentaren.</p>
+    </aside>
+    <figure>
+        <img src="/bild.jpg" alt="Straßenkreuzung">
+        <figcaption>
+            <p>Foto: Ein Archivbild zeigt Autos, Fahrräder und Busse an einer großen Kreuzung.</p>
+        </figcaption>
+    </figure>
+    <h2>Plan bleibt umstritten</h2>
+    <p>Der Senat verspricht zusätzliche Kontrollen, während Geschäftsleute Lieferzonen fordern und die Initiative darauf besteht, dass sichere Wege nicht erst nach weiteren Gutachten entstehen dürfen.</p>
+    <p>Viele Unterstützerinnen nennen den Umbau einen überfälligen Schritt, weil frühere Versuche an Zuständigkeiten, Geld und langen Abstimmungen zwischen Verwaltung und Bezirken gescheitert seien.</p>
+    <ul>
+        <li>Die Bezirke sollen bis zum Sommer prüfen, welche Kreuzungen zuerst umgebaut werden können.</li>
+    </ul>
+    <p>Diesen Artikel teilen</p>
+</article>
+<footer>
+    <p>Impressum Datenschutz Newsletter Kontakt</p>
+</footer>
+</body>
+</html>"#
+    }
+
+    fn fixture_article_without_title() -> &'static str {
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta name="description" content="Ein Test ohne Titel behält die bisherige Untitled-Fallback-Regel bei.">
+</head>
+<body>
+<article>
+    <p>Diese Meldung beschreibt ausführlich, dass die Überschrift in der Quelle fehlt, während der eigentliche Text weiterhin lang genug ist, um als Artikelkörper erkannt zu werden.</p>
+    <p>Die Redaktion ergänzt mehrere Absätze mit ausreichend Kontext, damit der Parser seine bestehende Mindestlänge erreicht und nicht wegen eines zu kurzen Körpers abbricht.</p>
+    <p>Weitere Sätze erklären die Lage, nennen Beteiligte, beschreiben den Ablauf und sorgen dafür, dass diese statische Fixture ohne Netzwerkanfrage zuverlässig ausgewertet werden kann.</p>
+    <p>Zum Schluss folgt ein weiterer Abschnitt, der keine Navigation, kein Dossier und keinen Footer enthält, sondern nur den eigentlichen Artikeltext für die Regression absichert.</p>
+</article>
+</body>
+</html>"#
+    }
+
+    fn fixture_boilerplate_without_body() -> &'static str {
+        r#"<!DOCTYPE html>
+<html>
+<head><title>Nur Navigation | taz.de</title></head>
+<body>
+<nav>
+    <p>Politik Kultur Gesellschaft Meinung Suche Newsletter Archiv Hilfe Kontakt Datenschutz Impressum</p>
+</nav>
+<aside>
+    <p>Mehr zum Thema finden Sie in Dossiers, Kommentaren, Interviews, Podcasts und älteren Artikeln der Redaktion.</p>
+</aside>
+<footer>
+    <p>Abonnement Anzeigen Presse Kontakt Datenschutz Impressum Newsletter Shop und weitere Servicelinks</p>
+</footer>
+</body>
+</html>"#
+    }
+
+    #[test]
+    fn article_fixture_extracts_metadata_body_and_clean_text() {
+        let article = parse_article_from_html(
+            "https://taz.de/Streit-um-Stadtverkehr/!424242/",
+            fixture_article_with_boilerplate(),
+        )
+        .unwrap();
+
+        assert_eq!(article.article_key, "424242");
+        assert_eq!(article.title, "Streit um Stadtverkehr");
+        assert_eq!(
+            article.subtitle,
+            "Die Stadt will Busspuren, Fahrradwege und breitere Gehwege schneller bauen, doch Händlerinnen und Anwohner streiten über Tempo und Kosten."
+        );
+        assert_eq!(article.author, "Test Autorin");
+        assert_eq!(article.date, "2025-04-02");
+        assert_eq!(article.section, "Verkehr");
+        assert_eq!(article.word_count, 110);
+        assert!(article.fetched_at.contains('T'));
+        assert!(article.body_text.contains("Fahrgäste an Haltestellen"));
+        assert!(article.body_text.contains("## Plan bleibt umstritten"));
+        assert!(article.body_text.contains("- Die Bezirke sollen"));
+        assert!(
+            article
+                .clean_text
+                .starts_with("Streit um Stadtverkehr\n\nDie Stadt will")
+        );
+        assert!(article.clean_text.contains("Von Test Autorin\n2025-04-02"));
+        assert!(article.clean_text.contains("Plan bleibt umstritten"));
+        assert!(!article.body_text.contains("Politik Kultur Meinung"));
+        assert!(!article.body_text.contains("Dossier"));
+        assert!(!article.body_text.contains("Foto:"));
+        assert!(!article.body_text.contains("Diesen Artikel teilen"));
+        assert!(!article.clean_text.contains("Diesen Artikel teilen"));
+    }
+
+    #[test]
+    fn article_without_title_uses_existing_untitled_fallback() {
+        let article = parse_article_from_html(
+            "https://taz.de/Meldung-ohne-Titel/!424244/",
+            fixture_article_without_title(),
+        )
+        .unwrap();
+
+        assert_eq!(article.title, "Untitled");
+        assert_eq!(
+            article.subtitle,
+            "Ein Test ohne Titel behält die bisherige Untitled-Fallback-Regel bei."
+        );
+        assert!(article.word_count >= 80);
+        assert!(
+            article
+                .body_text
+                .contains("Überschrift in der Quelle fehlt")
+        );
+    }
+
+    #[test]
+    fn boilerplate_page_without_usable_article_body_fails() {
+        let err = parse_article_from_html(
+            "https://taz.de/Nur-Navigation/!424245/",
+            fixture_boilerplate_without_body(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("could not extract article body"));
+    }
 }
