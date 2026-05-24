@@ -1335,6 +1335,16 @@ mod tests {
                 .any(|article| article.id == distinct_id && !article.uploaded_to_lingq)
         );
 
+        let stats = db.get_stats().unwrap();
+        assert_eq!(stats.total_articles, 2);
+        assert_eq!(stats.uploaded_articles, 1);
+
+        let article_keys = db.get_all_article_keys().unwrap();
+        assert_eq!(
+            article_keys,
+            HashSet::from([String::from("4242"), String::from("4243")])
+        );
+
         let not_uploaded = db
             .list_articles(&ArticleQuery {
                 only_not_uploaded: true,
@@ -1381,6 +1391,40 @@ mod tests {
             })
             .unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn mark_uploaded_preserves_article_text_and_records_link_once() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let mut article = make_article(
+            "https://taz.de/LingQ-Status-Erhalt/!6789/",
+            "LingQ Status Erhalt",
+        );
+        article.clean_text = "LingQ Status Erhalt\n\nOriginal saved library text.".to_owned();
+        article.word_count = 6;
+
+        let id = db.save_article(&article).unwrap();
+        db.mark_uploaded(id, 6789, "https://lingq.com/lesson/6789/")
+            .unwrap();
+        db.mark_uploaded(id, 6789, "https://lingq.com/lesson/6789/")
+            .unwrap();
+
+        let stored = db.get_article(id).unwrap().unwrap();
+        assert_eq!(stored.clean_text, article.clean_text);
+        assert_eq!(stored.word_count, article.word_count as i64);
+        assert!(stored.uploaded_to_lingq);
+        assert_eq!(stored.lingq_lesson_id, Some(6789));
+        assert_eq!(stored.lingq_lesson_url, "https://lingq.com/lesson/6789/");
+
+        let conn = db.conn().unwrap();
+        let link_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM lingq_links WHERE article_key = ?1",
+                params![article.article_key],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(link_count, 1);
     }
 
     #[test]
