@@ -1,4 +1,4 @@
 /target
 /installer/output
-/build.log
+*.log
 /artifacts
