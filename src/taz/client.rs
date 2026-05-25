@@ -497,6 +497,57 @@ mod tests {
 </html>"#
     }
 
+    fn fixture_article_without_optional_metadata() -> &'static str {
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Kleine Stadtmeldung | taz.de</title>
+</head>
+<body>
+<article>
+    <h1>Kleine Stadtmeldung</h1>
+    <p>Diese synthetische Meldung enthält keinen Teaser, keine Autorinnenangabe und kein Veröffentlichungsdatum im Kopf der Seite.</p>
+    <p>Der Text beschreibt eine lokale Sitzung, mehrere Wortmeldungen und eine Entscheidung, damit genug Fließtext für die bestehende Extraktion vorhanden ist.</p>
+    <p>Ein weiterer Absatz erwähnt Wege, Plätze, Verwaltung und Rückfragen aus der Nachbarschaft, ohne echte Artikelsätze von taz.de zu übernehmen.</p>
+    <p>Ein Ausschuss bittet die Verwaltung um eine neue Vorlage, weil Anwohnende, Gewerbe und Initiativen noch offene Fragen zu Zeitplan, Kosten und Zuständigkeiten haben.</p>
+    <p>Die Vorlage nennt mehrere Varianten und erklärt, dass jede Entscheidung erst nach einer weiteren Beratung im Bezirk umgesetzt werden soll.</p>
+    <p>Zum Schluss bleibt nur ein normaler Artikelkörper übrig, den der Parser ohne zusätzliche Metadaten speichern kann und der lang genug für die bestehende Mindestlänge ist.</p>
+</article>
+</body>
+</html>"#
+    }
+
+    fn fixture_paywalled_teaser_without_full_body() -> &'static str {
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Vorschau ohne Volltext | taz.de</title>
+    <meta property="og:title" content="Vorschau ohne Volltext">
+    <meta name="description" content="Diese synthetische Vorschau nennt nur das Thema, aber keinen vollständigen Artikelkörper.">
+</head>
+<body>
+<nav>
+    <p>Politik Suche Newsletter Archiv Kontakt Datenschutz Impressum</p>
+</nav>
+<article>
+    <header>
+        <h1>Vorschau ohne Volltext</h1>
+        <p>Diese synthetische Vorschau nennt nur das Thema, aber keinen vollständigen Artikelkörper.</p>
+    </header>
+    <div class="paywall">
+        <p>Lesen Sie diesen Artikel mit taz-zahl-ich. Für diesen Artikel müssen Sie angemeldet sein.</p>
+    </div>
+    <aside class="related">
+        <p>Mehr zum Thema: verwandte Meldungen, Kommentare, Dossiers und ältere Artikel.</p>
+    </aside>
+</article>
+<footer>
+    <p>Abonnement Anzeigen Presse Kontakt Datenschutz Impressum Newsletter Shop</p>
+</footer>
+</body>
+</html>"#
+    }
+
     fn fixture_boilerplate_without_body() -> &'static str {
         r#"<!DOCTYPE html>
 <html>
@@ -570,6 +621,60 @@ mod tests {
                 .body_text
                 .contains("Überschrift in der Quelle fehlt")
         );
+    }
+
+    #[test]
+    fn article_without_author_date_or_teaser_keeps_empty_optional_fields() {
+        let article = parse_article_from_html(
+            "https://taz.de/Kleine-Stadtmeldung/!424246/",
+            fixture_article_without_optional_metadata(),
+        )
+        .unwrap();
+
+        assert_eq!(article.title, "Kleine Stadtmeldung");
+        assert_eq!(article.subtitle, "");
+        assert_eq!(article.author, "");
+        assert_eq!(article.date, "");
+        assert_eq!(article.section, "Kleine Stadtmeldung");
+        assert!(article.word_count >= 50);
+        assert!(article.body_text.contains("keine Autorinnenangabe"));
+    }
+
+    #[test]
+    fn paywalled_teaser_only_page_is_rejected_before_library_save() {
+        let url = "https://taz.de/Vorschau-ohne-Volltext/!424247/";
+        let html = fixture_paywalled_teaser_without_full_body();
+        let document = Html::parse_document(html);
+        assert!(detect_paywall(&document, html));
+
+        let err = parse_article_from_html(url, html).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("too little text")
+                || message.contains("could not extract article body")
+        );
+
+        let db = crate::database::Database::open(std::path::Path::new(":memory:")).unwrap();
+        if let Ok(article) = parse_article_from_html(url, html) {
+            db.save_article(&article).unwrap();
+        }
+
+        let rows = db
+            .list_articles(&crate::database::ArticleQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(rows.is_empty());
+
+        let upload_candidates = db
+            .list_articles(&crate::database::ArticleQuery {
+                only_not_uploaded: true,
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(upload_candidates.is_empty());
     }
 
     #[test]

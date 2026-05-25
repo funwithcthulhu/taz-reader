@@ -628,6 +628,28 @@ mod tests {
         r#"<html><head></head><body><script>cp: "Redaktion/Politik", page: "artikel"</script></body></html>"#
     }
 
+    fn fixture_search_listing_page() -> &'static str {
+        r#"<!DOCTYPE html>
+<html>
+<body>
+<main>
+    <article>
+        <h2><a href="/Politik/Testartikel-zur-Suche/!1001001/">Suchtreffer zur Verkehrspolitik in der Stadt</a></h2>
+        <p>Ein synthetischer Teaser beschreibt Busse, Wege und einen Ausschuss.</p>
+    </article>
+    <article>
+        <h2><a href="/Politik/Testartikel-zur-Suche/!1001001/">Suchtreffer zur Verkehrspolitik in der Stadt</a></h2>
+        <p>Der doppelte Treffer darf nicht zweimal in der Liste landen.</p>
+    </article>
+    <article>
+        <h2><a href="/Kontakt/">Kontakt</a></h2>
+        <p>Navigation und Servicelinks sind keine Artikel.</p>
+    </article>
+</main>
+</body>
+</html>"#
+    }
+
     #[test]
     fn strip_search_suffix_removes_query_param() {
         assert_eq!(
@@ -811,6 +833,52 @@ mod tests {
     #[test]
     fn source_label_returns_path_for_section() {
         assert_eq!(source_label("https://taz.de/Politik/"), "Politik");
+    }
+
+    #[test]
+    fn search_listing_collects_articles_and_dedupes_urls() {
+        let article_url_re = Regex::new(r"^https://taz\.de/(?:[^/]+/)*(?:%21|!)\d+/??$").unwrap();
+        let document = Html::parse_document(fixture_search_listing_page());
+        let mut seen = HashSet::new();
+        let mut articles = Vec::new();
+        let mut report = DiscoveryReport {
+            source_pages_visited: 0,
+            section_pages_visited: 0,
+            subsection_pages_visited: 0,
+            topic_pages_visited: 0,
+            section_articles: 0,
+            subsection_articles: 0,
+            topic_articles: 0,
+            deduped_articles: 0,
+        };
+
+        collect_articles_from_document(
+            &article_url_re,
+            &document,
+            Some("Suche"),
+            "https://taz.de/!s=verkehr/",
+            DiscoverySourceKind::Search,
+            10,
+            &mut seen,
+            &mut articles,
+            &mut report,
+        );
+
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].article_key, "1001001");
+        assert_eq!(
+            articles[0].url,
+            "https://taz.de/Politik/Testartikel-zur-Suche/!1001001/"
+        );
+        assert_eq!(
+            articles[0].title,
+            "Suchtreffer zur Verkehrspolitik in der Stadt"
+        );
+        assert!(articles[0].teaser.contains("synthetischer Teaser"));
+        assert_eq!(articles[0].section, "Suche");
+        assert_eq!(articles[0].source_kind, DiscoverySourceKind::Search);
+        assert_eq!(articles[0].source_label, "!s=verkehr");
+        assert_eq!(report.deduped_articles, 1);
     }
 
     #[test]

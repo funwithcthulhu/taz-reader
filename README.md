@@ -50,6 +50,15 @@ cargo clippy --all-targets -- -D warnings
 cargo test -- --test-threads=1
 ```
 
+## Maintenance Docs
+
+- [`docs/site-change-playbook.md`](docs/site-change-playbook.md) covers parser
+  breakage, selector checks, and fixture updates.
+- [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md) covers GUI, LingQ,
+  installer, and release-script checks that are not fully automated.
+- [`docs/security-local-data.md`](docs/security-local-data.md) lists local token,
+  settings, and SQLite data paths.
+
 ## LingQ
 
 Taz Reader stores the LingQ token in the app data directory as a separate file,
@@ -130,6 +139,10 @@ src/
   lingq.rs              LingQ login, course listing, uploads, lesson sync
   settings.rs           Persistent settings and token storage
   lib.rs                App-data paths and migration helpers
+docs/
+  site-change-playbook.md  Parser selector diagnosis and fixture workflow
+  manual-smoke-test.md     GUI, LingQ, installer, and release-script checks
+  security-local-data.md   Token, settings, and SQLite data notes
 ui/
   app-window.slint      Main Slint UI definition
 assets/

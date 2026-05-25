@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use log::warn;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -149,7 +149,11 @@ impl SettingsStore {
 // Store the LingQ token outside `settings.json`.
 
 fn api_key_path() -> Result<PathBuf> {
-    Ok(crate::app_data_dir()?.join("lingq_token"))
+    Ok(api_key_path_in(&crate::app_data_dir()?))
+}
+
+fn api_key_path_in(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("lingq_token")
 }
 
 /// Load the LingQ API key from its dedicated file, falling back to `settings.json`
@@ -264,6 +268,15 @@ mod tests {
         assert_eq!(d.lingq_language, "de");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn api_key_path_uses_app_data_token_file() {
+        let dir = unique_temp_dir("token-path");
+        let path = api_key_path_in(&dir);
+
+        assert_eq!(path, dir.join("lingq_token"));
+        assert_ne!(path, dir.join("settings.json"));
     }
 
     #[test]

@@ -198,11 +198,16 @@ mod tests {
         let legacy = base.join(LEGACY_APP_DIR_NAME);
         std::fs::create_dir_all(&legacy).unwrap();
         std::fs::write(legacy.join("settings.json"), "{}").unwrap();
+        std::fs::write(legacy.join("lingq_token"), "token").unwrap();
 
         let resolved = prepare_app_data_dir(&base).unwrap();
 
         assert_eq!(resolved, base.join(APP_DIR_NAME));
         assert!(resolved.join("settings.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(resolved.join("lingq_token")).unwrap(),
+            "token"
+        );
         assert!(!legacy.exists());
 
         let _ = std::fs::remove_dir_all(&base);
